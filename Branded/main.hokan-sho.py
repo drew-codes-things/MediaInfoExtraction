@@ -27,20 +27,38 @@ def _val(line: str) -> str:
 
 
 def _norm_bitrate(raw: str) -> str:
+    """Normalise a MediaInfo bitrate string to 'NNNN kbps'.
+
+    MediaInfo can emit values like:
+      '19.8 Mb/s', '19 800 kb/s', '19800 kb/s', '448 kb/s',
+      '448000 b/s', '3 840 000 b/s'
+    We must NOT strip spaces before we know the unit, because
+    the number itself may contain thin-space thousands separators.
+    """
     raw = raw.strip()
-    cleaned = re.sub(r"[^\d\s\.]", "", raw)
-    for tok in cleaned.split():
-        try:
-            val = float(tok)
-            lower = raw.lower()
-            if "mb" in lower:
-                return f"{int(val * 1000)} kbps"
-            if "kb" in lower or "kbps" in lower:
-                return f"{int(val)} kbps"
-            if val >= 1000:
-                return f"{int(val / 1000)} kbps"
-        except ValueError:
-            pass
+    lower = raw.lower()
+
+    # Remove thousands separators (spaces / thin spaces / commas) from the number part
+    # but keep the unit suffix intact by splitting on the first letter.
+    num_part = re.split(r'[a-zA-Z]', raw, maxsplit=1)[0].strip()
+    num_clean = re.sub(r'[\s,]', '', num_part)   # remove separators only in the number
+
+    try:
+        val = float(num_clean)
+    except ValueError:
+        return raw
+
+    if 'mb' in lower or 'mbit' in lower or 'mbps' in lower:
+        return f"{int(round(val * 1000))} kbps"
+    if 'kb' in lower or 'kbit' in lower or 'kbps' in lower:
+        return f"{int(round(val))} kbps"
+    # bare bps  (e.g. '448000'  or  '448 000 b/s')
+    if 'b/s' in lower or 'bps' in lower or val > 100_000:
+        return f"{int(round(val / 1000))} kbps"
+    # Already in kbps range with no unit label
+    if val >= 100:
+        return f"{int(round(val))} kbps"
+    # Fallback
     return raw
 
 
@@ -85,9 +103,18 @@ def _resolve_stem(filepath: str) -> str:
 
 
 def _extract_quality_from_name(base: str) -> str:
-    bracket_parts = [p.split()[0].strip() for p in base.split("[") if "]" in p]
-    quality_parts = [q for q in bracket_parts if re.fullmatch(r"\d+[Kk]?[Pp]", q)]
-    return " ".join(quality_parts) if quality_parts else "N/A"
+    """Pull the resolution token (e.g. 1080p, 2160p, 4K) from bracket tags in
+    the filename.  The regex requires the token to be a *whole word* inside the
+    bracket so that strings like '2x' or '5.1' are never mistaken for resolution.
+    Valid examples: [1080p], [2160p], [720p], [4K]
+    """
+    bracket_parts = [p.split("]")[0].strip() for p in base.split("[") if "]" in p]
+    quality_parts = []
+    for part in bracket_parts:
+        for token in part.split():
+            if re.fullmatch(r"\d{3,4}[Pp]", token) or re.fullmatch(r"[48][Kk]", token):
+                quality_parts.append(token)
+    return quality_parts[0] if quality_parts else "N/A"
 
 
 # ─────────────────────────────── HDR ────────────────────────────────────────
@@ -126,22 +153,45 @@ _FORMAT_PRIORITY = {
     "OPUS":           1,
 }
 
+# Map raw MediaInfo Format values to display names
+_FORMAT_ALIASES = {
+    "MLP FBA 16-ch": "TrueHD Atmos",
+    "MLP FBA":       "TrueHD",
+    "DTS XLL X":     "DTS-X",
+    "DTS XLL":       "DTS-HD MA",
+    "DTS":           "DTS",
+    "E-AC-3 JOC":    "E-AC-3 JOC (Atmos)",
+    "E-AC-3":        "E-AC-3",
+    "AC-3":          "AC-3",
+    "FLAC":          "FLAC",
+    "AAC":           "AAC",
+    "MP3":           "MP3",
+    "VORBIS":        "Vorbis",
+    "OPUS":          "Opus",
+}
+
 
 def _audio_fmt(line: str) -> str:
+    """Return the canonical display name for an audio format."""
     raw = _val(line)
-    candidates = [p.strip() for p in raw.replace(" / ", "/").split("/")]
-    best, best_score = raw, -1
+    candidates = [p.strip() for p in re.split(r"\s*/\s*", raw)]
+
+    best_key, best_score = None, -1
     for cand in candidates:
         score = _FORMAT_PRIORITY.get(cand, 0)
         if score > best_score:
-            best, best_score = cand, score
-    if "JOC" in best or ("E-AC-3" in best and "JOC" in raw):
-        return "E-AC-3 JOC"
-    for token in ("MLP FBA 16-ch", "MLP FBA", "DTS XLL X", "DTS XLL",
-                  "E-AC-3 JOC", "E-AC-3", "AC-3", "FLAC", "DTS", "AAC", "MP3", "VORBIS", "OPUS"):
-        if token in best:
-            return token
-    return best
+            best_key, best_score = cand, score
+
+    if best_key == "E-AC-3" and any("JOC" in c for c in candidates):
+        best_key = "E-AC-3 JOC"
+
+    if best_key not in _FORMAT_ALIASES:
+        for token in _FORMAT_PRIORITY:
+            if token in raw:
+                best_key = token
+                break
+
+    return _FORMAT_ALIASES.get(best_key, raw.strip())
 
 
 def _should_record_format(count: int, ainfo: dict) -> bool:
@@ -345,7 +395,6 @@ def format_output(info: dict, is_remux: bool, src: str) -> str:
         if src: line += f" | {src}"
         sub_lines.append(_brand(line))
 
-    # File name includes "Encoded by The Hokan-Sho Network"
     fname = title
     if "Dolby Vision" in info: fname += f" {info['Dolby Vision']}"
     if "HDR format"   in info: fname += f" {info['HDR format']}"
