@@ -152,12 +152,37 @@ def _use_this_format(cnt, ainfo):
 
 
 def _audio_fmt(line):
+    raw = line.split(":", 1)[1].lower()
     parts = line.split(":", 1)[1].split()
+
+    if "truehd" in raw or "mlp fba" in raw:
+        if "16-ch" in raw or "atmos" in raw:
+            return "MLP FBA 16-ch"
+        return "MLP FBA"
+    if "dts" in raw:
+        if "xll" in raw or "hd master" in raw:
+            return "DTS XLL"
+        if "x" in raw:
+            return "DTS XLL X"
+        return "DTS"
+    if "ac-3" in raw or "ac3" in raw:
+        return "AC-3"
+    if "e-ac-3" in raw or "eac3" in raw:
+        if "joc" in raw:
+            return "E-AC-3 JOC"
+        return "E-AC-3"
+    if "flac" in raw:
+        return "FLAC"
+    if "aac" in raw:
+        return "AAC"
+    if "opus" in raw:
+        return "OPUS"
+    if "vorbis" in raw:
+        return "VORBIS"
+    if "mp3" in raw:
+        return "MP3"
+
     fmt = parts[1] if len(parts) > 1 else parts[0]
-    if {"XLL", "DTS"}.intersection(parts):
-        fmt = "DTS XLL"
-    elif {"FBA", "MLP"}.intersection(parts):
-        fmt = "MLP FBA 16-ch"
     return fmt.replace("JOC", "E-AC-3 JOC")
 
 
@@ -258,11 +283,14 @@ def process_file(path, is_remux, src):
     if not p.is_file():
         print(f"[!] Not found: {p}")
         return
-    info = extract_info(str(p))
-    out_text = format_output(info, is_remux, src)
-    out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
-    out_path.write_text(out_text, encoding="utf-8")
-    print(f"[\u2713] {out_path}")
+    try:
+        info = extract_info(str(p))
+        out_text = format_output(info, is_remux, src)
+        out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
+        out_path.write_text(out_text, encoding="utf-8")
+        print(f"[\u2713] {out_path}")
+    except Exception as e:
+        print(f"[!] Error processing {p.name}: {e}")
 
 
 def ask_yes_no(prompt, default="y"):
@@ -276,11 +304,15 @@ def ask_yes_no(prompt, default="y"):
 
 
 def choose_source():
-    opt = {"1": "BD", "2": "DVD", "3": "NF", "4": "CR", "5": "AMZN", "6": "HULU"}
+    opt = {
+        "1": "BD", "2": "DVD", "3": "NF", "4": "CR",
+        "5": "AMZN", "6": "HULU", "7": "DSNP", "8": "ATVP",
+        "9": "PMTP", "10": "PCOK", "11": "MAX", "12": "STAN"
+    }
     print("\nChoose media source:")
     for k, v in opt.items():
         print(f"{k}. {v}")
-    choice = input("Enter (1-6) [1]: ").strip() or "1"
+    choice = input("Enter (1-12) [1]: ").strip() or "1"
     return opt.get(choice, "BD")
 
 
