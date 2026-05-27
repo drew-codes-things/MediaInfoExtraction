@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import os
 import re
 import sys
@@ -21,7 +20,6 @@ def extract_info(file_path: str) -> dict:
     language_cnt = format_cnt = 0
 
     base = os.path.basename(file_path)
-    # Remove ".MediaInfo.txt" then any video extension
     if base.endswith(".MediaInfo.txt"):
         stem = base[:-13]
         stem = stem.rstrip('.')
