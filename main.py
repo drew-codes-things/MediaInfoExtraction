@@ -42,19 +42,20 @@ def extract_info(file_path: str) -> dict:
         lines = fh.readlines()
 
     for line in lines:
-        if line.startswith("Video"):
+        stripped = line.strip()
+        if re.match(r'^Video\b', stripped):
             section = "Video"
-        elif line.startswith("Audio"):
+        elif re.match(r'^Audio\b', stripped):
             if audio_info:
                 info["Audio"].append(audio_info)
             audio_info = {}
             section = "Audio"; language_cnt = format_cnt = 0
-        elif line.startswith("Text"):
+        elif re.match(r'^Text\b', stripped):
             if subtitle_info:
                 info["Subtitles"].append(subtitle_info)
             subtitle_info = {}
             section = "Text"; language_cnt = 0
-        elif not line.strip():
+        elif not stripped:
             section = None
 
         if section == "Video":
@@ -73,7 +74,8 @@ def extract_info(file_path: str) -> dict:
             elif line.startswith("Bit depth"):
                 info["Bit depth"] = line.split(":", 1)[1].strip().replace("bits", "Bit")
             elif "Display aspect ratio" in line and "Active" not in info:
-                info["Display aspect ratio"] = line.split(":", 1)[1].strip()
+                raw = line.split(":", 1)[1].strip()
+                info["Display aspect ratio"] = _norm_aspect_ratio(raw)
 
         elif section == "Audio":
             if "Language" in line and "Language_More" not in line:
@@ -119,20 +121,19 @@ def extract_info(file_path: str) -> dict:
 
 def _norm_bitrate(line):
     raw = line.split(":", 1)[1].strip()
-    parts = raw.split()
-    for tok in parts:
-        try:
-            val = float(tok)
-            if len(tok) == 8:
-                return f"{int(val/1000)} kbps"
-            unit = raw.lower()
-            if "mb/s" in unit:
-                return f"{int(val*1000)} kbps"
-            if "kb/s" in unit or "kbps" in unit:
-                return f"{int(val)} kbps"
-        except ValueError:
-            pass
-    return raw.replace("bits", "Bit")
+    # Handle raw large numbers (e.g. 8860000 bps → 8860 kbps) and units
+    cleaned = re.sub(r'[^0-9.]', ' ', raw).strip()
+    try:
+        val = float(cleaned.split()[0]) if cleaned else 0
+        if val > 100000:  # raw bps
+            return f"{int(val / 1000)} kbps"
+        if "mb/s" in raw.lower():
+            return f"{int(val * 1000)} kbps"
+        if "kb/s" in raw.lower() or "kbps" in raw.lower():
+            return f"{int(val)} kbps"
+        return f"{int(val)} kbps" if val > 0 else raw
+    except (ValueError, IndexError):
+        return raw.replace("bits", "Bit")
 
 
 def _handle_hdr(info, line):
@@ -190,6 +191,18 @@ def _height_to_quality(h):
             "480p" if h >= 480 else f"{h}p")
 
 
+def _norm_aspect_ratio(txt):
+    txt = txt.strip()
+    if ":" in txt:
+        try:
+            w, h = map(float, txt.split(":"))
+            if h > 0:
+                return f"{w / h:.3f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+    return txt
+
+
 def format_output(info, is_remux, src):
     vline = (f"Video: {info['Complete name']} / {info.get('Bit rate','N/A')} / "
              f"{info['Quality']} / {info.get('Frame rate','N/A')} / "
@@ -219,7 +232,11 @@ def format_output(info, is_remux, src):
         if {"Language", "Format"} <= s.keys():
             subs.append(f"Subtitles: {s['Language']} / {s['Format']} / {src}")
 
-    fname = f"{info['Complete name']} [{info['Quality']}]"
+    # Remove any existing quality tags from name to prevent duplicates like [1080p] [1080p]
+    clean_name = re.sub(r'\s*\[\d+[pK]\]', '', info['Complete name'], flags=re.IGNORECASE).strip()
+    fname = clean_name
+    if info.get('Quality') and info['Quality'] != "N/A":
+        fname += f" [{info['Quality']}]"
     if "Dolby Vision" in info:
         fname += f" [{info['Dolby Vision']}]"
     if "HDR format" in info:
@@ -239,7 +256,7 @@ def process_file(path, is_remux, src):
     out_text = format_output(info, is_remux, src)
     out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
     out_path.write_text(out_text, encoding="utf-8")
-    print(f"[✓] {out_path}")
+    print(f"[\u2713] {out_path}")
 
 
 def ask_yes_no(prompt, default="y"):
