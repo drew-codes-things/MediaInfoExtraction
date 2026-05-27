@@ -7,11 +7,11 @@ import shlex
 from pathlib import Path
 
 ASCII_ART = r"""
- _  _     _               ___ _         _  _    _                   _
-| || |___| |_____ _ _ ___/ __| |_  ___  | \| |__| |_ __ _____ _ _ | |__
-| __ / _ \ / / _ \ ' \___\__ \ ' \/ _ \ | .` / _` \ V  V / _ \ '_|| / /
-|_||_\___/_\_\___/_||_|  |___/_||_\___/ |_|\_\__,_|\_/\_/\___/_|  |_\_\
-                  MediaInfo Formatter v2.0 - Hokan-Sho Edition
+    __  ___         ___       ____      ____         ______                           __  __
+   /  |/  /__  ____/ (_)___ _/  _/___  / __/___     / ____/___  _________ ___  ____ _/ /_/ /____  _____
+  / /|_/ / _ \/ __  / / __ `// // __ \/ /_/ __ \   / /_  / __ \/ ___/ __ `__ \/ __ `/ __/ __/ _ \/ ___/
+ / /  / /  __/ /_/ / / /_/ // // / / / __/ /_/ /  / __/ / /_/ / /  / / / / / / /_/ / /_/ /_/  __/ /
+/_/  /_/\___/\__,_/_/\__,_/___/_/ /_/_/  \____/  /_/    \____/_/  /_/ /_/ /_/\__,_/\__/\__/\___/_/
 """
 
 def extract_info(file_path: str) -> dict:
@@ -44,19 +44,20 @@ def extract_info(file_path: str) -> dict:
         lines = fh.readlines()
 
     for line in lines:
-        if line.startswith("Video"):
+        stripped = line.strip()
+        if re.match(r'^Video\b', stripped):
             section = "Video"
-        elif line.startswith("Audio"):
+        elif re.match(r'^Audio\b', stripped):
             if audio_info:
                 info["Audio"].append(audio_info)
             audio_info = {}
             section = "Audio"; language_cnt = format_cnt = 0
-        elif line.startswith("Text"):
+        elif re.match(r'^Text\b', stripped):
             if subtitle_info:
                 info["Subtitles"].append(subtitle_info)
             subtitle_info = {}
             section = "Text"; language_cnt = 0
-        elif not line.strip():
+        elif not stripped:
             section = None
 
         if section == "Video":
@@ -69,13 +70,14 @@ def extract_info(file_path: str) -> dict:
                 info["Format profile"] = line.split(":", 1)[1].strip()
             elif line.startswith("HDR format"):
                 _handle_hdr(info, line)
-            elif "Format " in line:
+            elif "Format  " in line:
                 vals = line.split(":", 1)[1].split()
                 info["Format"] = vals[1] if len(vals) > 1 else vals[0]
             elif line.startswith("Bit depth"):
                 info["Bit depth"] = line.split(":", 1)[1].strip().replace("bits", "Bit")
             elif "Display aspect ratio" in line and "Active" not in info:
-                info["Display aspect ratio"] = line.split(":", 1)[1].strip()
+                raw = line.split(":", 1)[1].strip()
+                info["Display aspect ratio"] = _norm_aspect_ratio(raw)
 
         elif section == "Audio":
             if "Language" in line and "Language_More" not in line:
@@ -121,20 +123,19 @@ def extract_info(file_path: str) -> dict:
 
 def _norm_bitrate(line):
     raw = line.split(":", 1)[1].strip()
-    parts = raw.split()
-    for tok in parts:
-        try:
-            val = float(tok)
-            if len(tok) == 8:
-                return f"{int(val/1000)} kbps"
-            unit = raw.lower()
-            if "mb/s" in unit:
-                return f"{int(val*1000)} kbps"
-            if "kb/s" in unit or "kbps" in unit:
-                return f"{int(val)} kbps"
-        except ValueError:
-            pass
-    return raw.replace("bits", "Bit")
+    # Handle raw large numbers (e.g. 8860000 bps → 8860 kbps) and units
+    cleaned = re.sub(r'[^0-9.]', ' ', raw).strip()
+    try:
+        val = float(cleaned.split()[0]) if cleaned else 0
+        if val > 100000:  # raw bps
+            return f"{int(val / 1000)} kbps"
+        if "mb/s" in raw.lower():
+            return f"{int(val * 1000)} kbps"
+        if "kb/s" in raw.lower() or "kbps" in raw.lower():
+            return f"{int(val)} kbps"
+        return f"{int(val)} kbps" if val > 0 else raw
+    except (ValueError, IndexError):
+        return raw.replace("bits", "Bit")
 
 
 def _handle_hdr(info, line):
@@ -192,6 +193,18 @@ def _height_to_quality(h):
             "480p" if h >= 480 else f"{h}p")
 
 
+def _norm_aspect_ratio(txt):
+    txt = txt.strip()
+    if ":" in txt:
+        try:
+            w, h = map(float, txt.split(":"))
+            if h > 0:
+                return f"{w / h:.3f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+    return txt
+
+
 def _brand(line):
     i = line.rfind("/")
     return line[: i + 1] + " Hokan-Sho" + line[i + 1:]
@@ -227,7 +240,11 @@ def format_output(info, is_remux, src):
         if {"Language", "Format"} <= s.keys():
             subs.append(_brand(f"Subtitles: {s['Language']} / {s['Format']} / {src}"))
 
-    fname = f"{info['Complete name']} [{info['Quality']}]"
+    # Remove any existing quality tags from name to prevent duplicates like [1080p] [1080p]
+    clean_name = re.sub(r'\s*\[\d+[pK]\]', '', info['Complete name'], flags=re.IGNORECASE).strip()
+    fname = clean_name
+    if info.get('Quality') and info['Quality'] != "N/A":
+        fname += f" [{info['Quality']}]"
     if "Dolby Vision" in info:
         fname += f" [{info['Dolby Vision']}]"
     if "HDR format" in info:
@@ -248,7 +265,7 @@ def process_file(path, is_remux, src):
     out_text = format_output(info, is_remux, src)
     out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
     out_path.write_text(out_text, encoding="utf-8")
-    print(f"[✓] {out_path}")
+    print(f"[\u2713] {out_path}")
 
 
 def ask_yes_no(prompt, default="y"):
@@ -274,8 +291,8 @@ def main():
     print(ASCII_ART)
 
     print("Select run mode:")
-    print("1. Batch - drop or paste multiple files (space-separated or quoted)")
-    print("2. Interactive - one path at a time")
+    print("1. Batch – drop or paste multiple files (space-separated or quoted)")
+    print("2. Interactive – one path at a time")
     mode = input("Choose 1 or 2 [1]: ").strip() or "1"
 
     if mode == "1":
