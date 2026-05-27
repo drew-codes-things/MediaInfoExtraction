@@ -1,4 +1,4 @@
-# MediaInfo Formatter
+# MediaInfo Formatter (fix?)
 
 A Python 3 command-line tool that parses **MediaInfo plain-text reports** (`.MediaInfo.txt`) and produces clean, consistently formatted metadata lines.
 
