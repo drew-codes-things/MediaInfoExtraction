@@ -26,22 +26,30 @@ def _val(line: str) -> str:
     return parts[1].strip() if len(parts) > 1 else parts[0].strip()
 
 
-def _norm_bitrate(raw: str) -> str:
-    """Normalise a MediaInfo bitrate string to 'NNNN kbps'.
-
-    MediaInfo can emit values like:
-      '19.8 Mb/s', '19 800 kb/s', '19800 kb/s', '448 kb/s',
-      '448000 b/s', '3 840 000 b/s'
-    We must NOT strip spaces before we know the unit, because
-    the number itself may contain thin-space thousands separators.
+def _parse_path(raw: str) -> str:
+    """Strip surrounding quotes from a pasted file path.
+    Handles single quotes, double quotes, and Windows-style paths
+    that may have been drag-and-dropped into the terminal.
     """
+    raw = raw.strip()
+    try:
+        parts = shlex.split(raw)
+        if parts:
+            return parts[0]
+    except ValueError:
+        pass
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
+        return raw[1:-1]
+    return raw
+
+
+def _norm_bitrate(raw: str) -> str:
+    """Normalise a MediaInfo bitrate string to 'NNNN kbps'."""
     raw = raw.strip()
     lower = raw.lower()
 
-    # Remove thousands separators (spaces / thin spaces / commas) from the number part
-    # but keep the unit suffix intact by splitting on the first letter.
     num_part = re.split(r'[a-zA-Z]', raw, maxsplit=1)[0].strip()
-    num_clean = re.sub(r'[\s,]', '', num_part)   # remove separators only in the number
+    num_clean = re.sub(r'[\s,]', '', num_part)
 
     try:
         val = float(num_clean)
@@ -52,13 +60,10 @@ def _norm_bitrate(raw: str) -> str:
         return f"{int(round(val * 1000))} kbps"
     if 'kb' in lower or 'kbit' in lower or 'kbps' in lower:
         return f"{int(round(val))} kbps"
-    # bare bps  (e.g. '448000'  or  '448 000 b/s')
     if 'b/s' in lower or 'bps' in lower or val > 100_000:
         return f"{int(round(val / 1000))} kbps"
-    # Already in kbps range with no unit label
     if val >= 100:
         return f"{int(round(val))} kbps"
-    # Fallback
     return raw
 
 
@@ -103,11 +108,6 @@ def _resolve_stem(filepath: str) -> str:
 
 
 def _extract_quality_from_name(base: str) -> str:
-    """Pull the resolution token (e.g. 1080p, 2160p, 4K) from bracket tags in
-    the filename.  The regex requires the token to be a *whole word* inside the
-    bracket so that strings like '2x' or '5.1' are never mistaken for resolution.
-    Valid examples: [1080p], [2160p], [720p], [4K]
-    """
     bracket_parts = [p.split("]")[0].strip() for p in base.split("[") if "]" in p]
     quality_parts = []
     for part in bracket_parts:
@@ -153,7 +153,6 @@ _FORMAT_PRIORITY = {
     "OPUS":           1,
 }
 
-# Map raw MediaInfo Format values to display names
 _FORMAT_ALIASES = {
     "MLP FBA 16-ch": "TrueHD Atmos",
     "MLP FBA":       "TrueHD",
@@ -172,7 +171,6 @@ _FORMAT_ALIASES = {
 
 
 def _audio_fmt(line: str) -> str:
-    """Return the canonical display name for an audio format."""
     raw = _val(line)
     candidates = [p.strip() for p in re.split(r"\s*/\s*", raw)]
 
@@ -479,9 +477,10 @@ def main() -> None:
                 process_file(f, is_remux, src)
     else:
         while True:
-            f = input("\nPath to MediaInfo .txt file (blank to quit): ").strip()
-            if not f:
+            raw = input("\nPath to MediaInfo .txt file (blank to quit): ").strip()
+            if not raw:
                 break
+            f = _parse_path(raw)
             is_remux = ask_yes_no("Remux?", default="n")
             src      = choose_source()
             process_file(f, is_remux, src)
