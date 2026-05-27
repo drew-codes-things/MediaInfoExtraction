@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MediaInfo Formatter — The Hokan-Sho Network Edition
+MediaInfo Formatter — Generic Edition
 Parses MediaInfo .txt files and outputs formatted track metadata.
+No branding. Drop-in for any release group or personal use.
 """
 
 import os
@@ -11,11 +12,11 @@ import shlex
 from pathlib import Path
 
 ASCII_ART = r"""
-__ ___ ___ ____ ____ ______ __ __
-/ |/ /__ ____/ (_)___ _/ _/___ / __/___ / ____/___ _________ ___ ____ _/ /_/ /____ _____
-/ /|_/ / _ \/ __ / / __ `// // __ \/ /_/ __ \ / /_ / __ \/ ___/ __ `__ \/ __ `/ __/ __/ _ \/ ___/
-/ / / / __/ /_/ / / /_/ // // / / / __/ /_/ / / __/ / /_/ / / / / / / / /_/ / /_/ /_/ __/ /
-/_/ /_/\___/\__,_/_/\__,_/___/_/ /_/_/ \____/ /_/ \____/_/ /_/ /_/ /_/\__,_/\__/\__/\___/_/
+ __  __        _ _      ___        __
+|  \/  |___ __| (_)__ _|_ _|_ __  / _|___
+| |\/| / -_) _` | / _` || || '_ \|  _/ _ \
+|_|  |_\___\__,_|_\__,_|___|_.__/|_| \___/
+     MediaInfo Formatter v2.1 — Generic
 """
 
 # ─────────────────────────────── helpers ────────────────────────────────────
@@ -39,31 +40,20 @@ def _parse_path(raw: str) -> str:
     return raw
 
 
-def _norm_bitrate_raw(raw: str) -> str:
-    """Return the raw numeric bitrate value from MediaInfo (e.g. '8860000')."""
-    raw = raw.strip()
-    # MediaInfo stores raw bps as a plain integer on the first occurrence
-    num = re.sub(r"[\s,]", "", raw.split()[0])
-    if num.isdigit():
-        return num
-    return raw
-
-
-def _norm_bitrate_kbps(raw: str) -> str:
-    """Return a human kbps string (e.g. '640 kbps') for audio."""
+def _norm_bitrate(raw: str) -> str:
     raw = raw.strip()
     lower = raw.lower()
-    num_part = re.split(r"[a-zA-Z]", raw, maxsplit=1)[0].strip()
-    num_clean = re.sub(r"[\s,]", "", num_part)
+    num_part = re.split(r'[a-zA-Z]', raw, maxsplit=1)[0].strip()
+    num_clean = re.sub(r'[\s,]', '', num_part)
     try:
         val = float(num_clean)
     except ValueError:
         return raw
-    if "mb" in lower or "mbps" in lower:
+    if 'mb' in lower or 'mbit' in lower or 'mbps' in lower:
         return f"{int(round(val * 1000))} kbps"
-    if "kb" in lower or "kbps" in lower:
+    if 'kb' in lower or 'kbit' in lower or 'kbps' in lower:
         return f"{int(round(val))} kbps"
-    if val > 100_000:
+    if 'b/s' in lower or 'bps' in lower or val > 100_000:
         return f"{int(round(val / 1000))} kbps"
     if val >= 100:
         return f"{int(round(val))} kbps"
@@ -75,14 +65,14 @@ def _norm_channels(text: str) -> str:
     if not m:
         return text
     n = int(m.group())
-    return {8: "7.1", 6: "5.1", 4: "4.0", 3: "3.0", 2: "2", 1: "1.0"}.get(n, text)
+    return {8: "7.1", 6: "5.1", 4: "4.0", 3: "3.0", 2: "2.0", 1: "1.0"}.get(n, text)
 
 
 def _norm_sampling(text: str) -> str:
     nums = re.sub(r"[^\d]", "", text.split("/")[0])
     if nums:
         hz = int(nums)
-        return f"{hz / 1000:.1f} kHz" if hz >= 1000 else f"{hz} Hz"
+        return f"{hz/1000:.1f} kHz" if hz >= 1000 else f"{hz} Hz"
     return text.strip()
 
 
@@ -107,19 +97,12 @@ def _resolve_stem(filepath: str) -> str:
 
 def _extract_quality_from_name(base: str) -> str:
     bracket_parts = [p.split("]")[0].strip() for p in base.split("[") if "]" in p]
+    quality_parts = []
     for part in bracket_parts:
         for token in part.split():
             if re.fullmatch(r"\d{3,4}[Pp]", token) or re.fullmatch(r"[48][Kk]", token):
-                return token
-    return "N/A"
-
-
-def _brand(line: str) -> str:
-    """Append ' Hokan-Sho' before the last segment after the final '/'."""
-    i = line.rfind("/")
-    if i == -1:
-        return line + " / Hokan-Sho"
-    return line[: i + 1] + " Hokan-Sho" + line[i + 1:]
+                quality_parts.append(token)
+    return quality_parts[0] if quality_parts else "N/A"
 
 
 # ─────────────────────────────── HDR ────────────────────────────────────────
@@ -223,15 +206,14 @@ def extract_info(filepath: str) -> dict:
     info["Complete name"] = _resolve_stem(filepath)
     info["Quality"]       = _extract_quality_from_name(os.path.basename(filepath))
 
-    section     = None
-    audio_info  : dict = {}
-    sub_info    : dict = {}
-    lang_cnt    = fmt_cnt = comm_cnt = 0
+    section    = None
+    audio_info : dict = {}
+    sub_info   : dict = {}
+    lang_cnt   = fmt_cnt = comm_cnt = 0
 
     with open(filepath, encoding="utf-8", errors="ignore") as fh:
         lines_raw = fh.readlines()
 
-    # Grab resolution for quality fallback
     w = h = None
     for ln in lines_raw:
         if w is None and re.match(r"^Width\s*:", ln):
@@ -243,25 +225,6 @@ def extract_info(filepath: str) -> dict:
 
     if h and info["Quality"] == "N/A":
         info["Quality"] = _height_to_quality(h)
-
-    # Grab writing application from General section for the first audio stub line
-    for ln in lines_raw:
-        if re.match(r"^Writing application\s*:", ln):
-            vals = _val(ln).split("\n")
-            # pick the human-readable one (second occurrence has short form)
-            info["Writing application"] = vals[0].strip()
-            break
-
-    # Grab container format from General section
-    general_fmt_cnt = 0
-    for ln in lines_raw:
-        if re.match(r"^Format\s*:", ln):
-            general_fmt_cnt += 1
-            if general_fmt_cnt == 2:
-                info["Container"] = _val(ln)
-                break
-        if re.match(r"^Video\b", ln.strip()):
-            break
 
     for line in lines_raw:
         stripped = line.strip()
@@ -278,7 +241,7 @@ def extract_info(filepath: str) -> dict:
 
         if section == "Video":
             if re.match(r"^Bit rate\s*:", line) and "Maximum" not in line and "Nominal" not in line:
-                info["Bit rate"] = _norm_bitrate_raw(_val(line))
+                info["Bit rate"] = _norm_bitrate(_val(line))
             elif re.match(r"^Frame rate\s*:", line):
                 info["Frame rate"] = _val(line).split()[0] + " fps"
             elif re.match(r"^Format profile\s*:", line):
@@ -289,15 +252,24 @@ def extract_info(filepath: str) -> dict:
                 info["Format"] = _val(line)
             elif re.match(r"^Bit depth\s*:", line):
                 info["Bit depth"] = _val(line).replace("bits", "").strip() + " Bit"
-            elif re.match(r"^Display aspect ratio\s*:", line):
-                # Prefer the fractional form e.g. "16:9" over the decimal "1.778"
-                raw_ar = _val(line)
-                # MediaInfo emits decimal first, then fractional on next duplicate line
-                if "Display aspect ratio" not in info:
-                    info["Display aspect ratio"] = raw_ar
-                elif re.search(r"\d+:\d+", raw_ar):
-                    # fractional form — always prefer this
-                    info["Display aspect ratio"] = re.search(r"\d+:\d+", raw_ar).group()
+            elif re.match(r"^Display aspect ratio\s*:", line) and "Display aspect ratio" not in info:
+                info["Display aspect ratio"] = _val(line).split()[0]
+            elif re.match(r"^Color primaries\s*:", line):
+                info["Color primaries"] = _val(line)
+            elif re.match(r"^Transfer characteristics\s*:", line):
+                info["Transfer characteristics"] = _val(line)
+            elif re.match(r"^Matrix coefficients\s*:", line):
+                info["Matrix coefficients"] = _val(line)
+            elif re.match(r"^Mastering display color primaries\s*:", line):
+                info["Mastering display color primaries"] = _val(line)
+            elif re.match(r"^Mastering display luminance\s*:", line):
+                info["Mastering display luminance"] = _val(line)
+            elif re.match(r"^Maximum Content Light Level\s*:", line):
+                info["MaxCLL"] = _val(line)
+            elif re.match(r"^Maximum Frame-Average Light Level\s*:", line):
+                info["MaxFALL"] = _val(line)
+            elif re.match(r"^Codec ID\s*:", line) and "Codec ID" not in info:
+                info["Codec ID"] = _val(line)
 
         elif section == "Audio":
             if re.match(r"^Language\s*:", line) and "Language/" not in line:
@@ -311,18 +283,28 @@ def extract_info(filepath: str) -> dict:
             elif re.match(r"^Commercial name\s*:", line):
                 comm_cnt += 1
                 if comm_cnt == 1: audio_info["Commercial name"] = _val(line)
-            elif re.match(r"^Channel\(s\)\s*:", line):
+            elif re.match(r"^Format/Info\s*:", line) and "Format/Info" not in audio_info:
+                audio_info["Format/Info"] = _val(line)
+            elif re.match(r"^Channels\s*:", line):
                 audio_info["Channels"] = _norm_channels(_val(line))
+            elif re.match(r"^Channel positions\s*:", line) and "Channel positions" not in audio_info:
+                audio_info["Channel positions"] = _val(line)
             elif re.match(r"^Sampling rate\s*:", line):
                 audio_info["Sampling rate"] = _norm_sampling(_val(line))
             elif re.match(r"^Maximum bit rate\s*:", line):
-                audio_info["Maximum bit rate"] = _norm_bitrate_kbps(_val(line))
+                audio_info["Maximum bit rate"] = _norm_bitrate(_val(line))
             elif re.match(r"^Bit rate\s*:", line) and "Maximum" not in line:
-                audio_info["Bit rate"] = _norm_bitrate_kbps(_val(line))
+                audio_info["Bit rate"] = _norm_bitrate(_val(line))
             elif re.match(r"^Bit depth\s*:", line):
                 audio_info["Bit depth"] = _val(line).replace("bits", "").strip() + " Bit"
+            elif re.match(r"^Bit rate mode\s*:", line):
+                audio_info["Bit rate mode"] = _val(line)
+            elif re.match(r"^Compression mode\s*:", line):
+                audio_info["Compression mode"] = _val(line)
             elif re.match(r"^Default\s*:", line): audio_info["Default"] = _val(line)
             elif re.match(r"^Forced\s*:",  line): audio_info["Forced"]  = _val(line)
+            elif re.match(r"^Number of dynamic objects\s*:", line):
+                audio_info["Dynamic objects"] = _val(line)
             elif re.match(r"^Codec ID\s*:", line) and "Codec ID" not in audio_info:
                 audio_info["Codec ID"] = _val(line)
 
@@ -355,7 +337,6 @@ def format_output(info: dict, is_remux: bool, src: str) -> str:
     title   = info["Complete name"]
     quality = info.get("Quality", "N/A")
 
-    # ── Video line ──────────────────────────────────────────────────────────
     video_parts = [
         title,
         info.get("Bit rate", "N/A"),
@@ -371,19 +352,9 @@ def format_output(info: dict, is_remux: bool, src: str) -> str:
         info.get("Format", "N/A"),
     ]
     if src: video_parts.append(src)
-    video_line = _brand("Video: " + " / ".join(str(p) for p in video_parts))
+    video_line = " | ".join(str(p) for p in video_parts)
 
-    # ── Audio lines ─────────────────────────────────────────────────────────
     audio_lines = []
-
-    # First audio line: writing app / container format stub (like the expected output)
-    writing_app = info.get("Writing application", "")
-    container   = info.get("Container", "Matroska")
-    if writing_app:
-        stub = f"Audio: {writing_app} / {container} / {src}" if src else f"Audio: {writing_app} / {container}"
-        audio_lines.append(_brand(stub))
-
-    # Subsequent lines: one per audio track
     for a in info["Audio"]:
         parts = [
             a.get("Language", a.get("Language code", "N/A")),
@@ -394,34 +365,29 @@ def format_output(info: dict, is_remux: bool, src: str) -> str:
         ]
         if "Bit depth" in a: parts.append(a["Bit depth"])
         if src: parts.append(src)
-        audio_lines.append(_brand("Audio: " + " / ".join(str(p) for p in parts)))
+        audio_lines.append(" | ".join(str(p) for p in parts))
 
-    # ── Subtitle lines ──────────────────────────────────────────────────────
     sub_lines = []
     for s in info["Subtitles"]:
         if "Language" not in s and "Language code" not in s:
             continue
         lang = s.get("Language", s.get("Language code", "N/A"))
         fmt  = s.get("Format", "N/A")
-        ln   = f"Subtitles: {lang} / {fmt}"
-        if src: ln += f" / {src}"
-        sub_lines.append(_brand(ln))
+        line = f"Subtitles | {lang} | {fmt}"
+        if src: line += f" | {src}"
+        sub_lines.append(line)
 
-    # ── File name line ──────────────────────────────────────────────────────
-    fname = f"{title} [{quality}]"
-    if quality and quality != "N/A":
-        fname += f" [{quality}]"   # second quality tag as in expected output
-    if "Dolby Vision" in info: fname += f" [{info['Dolby Vision']}]"
-    if "HDR format"   in info: fname += f" [{info['HDR format']}]"
-    if is_remux: fname += " [Remux]"
-    fname += " [Encoded by The Hokan-Sho Network]"
-    file_line = f"File name: {fname}"
+    fname = title
+    if "Dolby Vision" in info: fname += f" {info['Dolby Vision']}"
+    if "HDR format"   in info: fname += f" {info['HDR format']}"
+    if is_remux: fname += " Remux"
 
-    # ── Assemble ────────────────────────────────────────────────────────────
-    sections = [file_line, "", video_line, ""]
-    sections.extend(audio_lines)
+    sections = [f"File name: {fname}", video_line]
+    if audio_lines:
+        sections.append("--- Audio ---")
+        sections.extend(audio_lines)
     if sub_lines:
-        sections.append("")
+        sections.append("--- Subtitles ---")
         sections.extend(sub_lines)
 
     return "\n".join(sections)
@@ -438,7 +404,7 @@ def process_file(path: str, is_remux: bool, src: str) -> None:
     out_text = format_output(info, is_remux, src)
     out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
     out_path.write_text(out_text, encoding="utf-8")
-    print(f"  \u2713 Written \u2192 {out_path}")
+    print(f"  ✓ Written → {out_path}")
 
 
 # ─────────────────────────────── CLI ────────────────────────────────────────
@@ -504,7 +470,7 @@ def main() -> None:
             if not ask_yes_no("Process another file?", default="y"):
                 break
 
-    input("\nPress Enter to exit\u2026")
+    input("\nPress Enter to exit…")
 
 
 if __name__ == "__main__":
