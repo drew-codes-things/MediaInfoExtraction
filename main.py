@@ -121,11 +121,10 @@ def extract_info(file_path: str) -> dict:
 
 def _norm_bitrate(line):
     raw = line.split(":", 1)[1].strip()
-    # Handle raw large numbers (e.g. 8860000 bps → 8860 kbps) and units
     cleaned = re.sub(r'[^0-9.]', ' ', raw).strip()
     try:
         val = float(cleaned.split()[0]) if cleaned else 0
-        if val > 100000:  # raw bps
+        if val > 100000:
             return f"{int(val / 1000)} kbps"
         if "mb/s" in raw.lower():
             return f"{int(val * 1000)} kbps"
@@ -232,7 +231,6 @@ def format_output(info, is_remux, src):
         if {"Language", "Format"} <= s.keys():
             subs.append(f"Subtitles: {s['Language']} / {s['Format']} / {src}")
 
-    # Remove any existing quality tags from name to prevent duplicates like [1080p] [1080p]
     clean_name = re.sub(r'\s*\[\d+[pK]\]', '', info['Complete name'], flags=re.IGNORECASE).strip()
     fname = clean_name
     if info.get('Quality') and info['Quality'] != "N/A":
