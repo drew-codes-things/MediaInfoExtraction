@@ -13,6 +13,26 @@ __ ___  ___  ____  ____  ______   __  __
 /_/ /_/\___/\__,_/_/\__,_/___/_/ /_/_/ \____/ /_/ \____/_/ /_/ /_/ /_/\__,_/\__/\__/\___/_/
 """
 
+DEFAULT_SOURCES = [
+    "BD", "DVD", "NF", "CR", "AMZN", "HULU", "DSNP", "ATVP",
+    "PMTP", "PCOK", "MAX", "STAN",
+    "HMAX", "ITVX", "BBCIPLAYER", "PEACOCK",
+]
+
+
+def load_sources():
+    """Load sources from sources.txt next to the script, falling back to hardcoded list."""
+    sources_file = Path(__file__).parent / "sources.txt"
+    if sources_file.is_file():
+        try:
+            lines = [l.strip() for l in sources_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+            if lines:
+                return lines
+        except OSError:
+            pass
+    return DEFAULT_SOURCES
+
+
 def extract_info(file_path: str) -> dict:
     info = {"Audio": [], "Subtitles": []}
     section = None
@@ -157,7 +177,7 @@ def _audio_fmt(line):
     if "truehd" in raw or "mlp fba" in raw:
         if "16-ch" in raw or "atmos" in raw:
             return "MLP FBA 16-ch"
-        return "MLP FBA
+        return "MLP FBA"  # fixed: was missing closing quote
     if "dts" in raw:
         if "xll" in raw or "hd master" in raw:
             return "DTS XLL"
@@ -279,8 +299,12 @@ def process_file(path, is_remux, src):
         info = extract_info(str(p))
         out_text = format_output(info, is_remux, src)
         out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
-        out_path.write_text(out_text, encoding="utf-8")
-        print(f"[\u2713] {out_path}")
+        try:
+            out_path.write_text(out_text, encoding="utf-8")
+            print(f"[\u2713] {out_path}")
+        except OSError as e:
+            print(f"[!] Could not write output file '{out_path}': {e}")
+            print(f"    Tip: check that the folder is not read-only or network-mounted.")
     except Exception as e:
         print(f"[!] Error processing {p.name}: {e}")
 
@@ -295,29 +319,31 @@ def ask_yes_no(prompt, default="y"):
     return ans == "y"
 
 
-def choose_source():
-    opt = {
-        "1": "BD", "2": "DVD", "3": "NF", "4": "CR",
-        "5": "AMZN", "6": "HULU", "7": "DSNP", "8": "ATVP",
-        "9": "PMTP", "10": "PCOK", "11": "MAX", "12": "STAN"
-    }
+def choose_source(sources):
     print("\nChoose media source:")
-    for k, v in opt.items():
-        print(f"{k}. {v}")
-    choice = input("Enter (1-12) [1]: ").strip() or "1"
-    return opt.get(choice, "BD")
+    for i, s in enumerate(sources, 1):
+        print(f"{i}. {s}")
+    choice = input(f"Enter (1-{len(sources)}) [1]: ").strip() or "1"
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(sources):
+            return sources[idx]
+    except ValueError:
+        pass
+    return sources[0]
 
 
 def main():
     print(ASCII_ART)
+    sources = load_sources()
 
     print("Select run mode:")
-    print("1. Batch - drop or paste multiple files (space-separated or quoted)")
+    print("1. Batch - drag and drop files or paste quoted paths")
     print("2. Interactive - one path at a time")
     mode = input("Choose 1 or 2 [1]: ").strip() or "1"
 
     if mode == "1":
-        print("\nDrag and drop your file(s) here, then press Enter:")
+        print("\nDrag and drop your file(s) here (quoted paths are supported), then press Enter:")
         raw = input("> ").strip()
         files = shlex.split(raw)
         if not files:
@@ -326,14 +352,14 @@ def main():
         same = ask_yes_no("\nUse the SAME settings for every file?", default="y")
         if same:
             is_remux = ask_yes_no("Remux?", default="n")
-            src = choose_source()
+            src = choose_source(sources)
             for f in files:
                 process_file(f, is_remux, src)
         else:
             for f in files:
                 print(f"\n--- {f} ---")
                 is_remux = ask_yes_no("Remux?", default="n")
-                src = choose_source()
+                src = choose_source(sources)
                 process_file(f, is_remux, src)
 
     else:
@@ -342,7 +368,7 @@ def main():
             if not f:
                 break
             is_remux = ask_yes_no("Remux?", default="n")
-            src = choose_source()
+            src = choose_source(sources)
             process_file(f, is_remux, src)
             if not ask_yes_no("Process another file?", default="y"):
                 break
