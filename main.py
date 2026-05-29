@@ -167,7 +167,20 @@ def _handle_hdr(info, line):
 
 
 def _use_this_format(cnt, ainfo):
-    return cnt == 2 or (cnt == 1 and ainfo.get("Channels") in {"7.1", "5.1"})
+    """
+    Decide whether to capture a Format line for an audio track.
+
+    MediaInfo emits two Format lines per track: the first is the container
+    format identifier and the second is the actual codec name we want.
+    For multichannel tracks (5.1/7.1) the codec name appears on the first
+    Format line, so we capture it immediately.
+    For stereo or unknown-channel tracks we always capture on cnt == 1
+    as a fallback so single-track stereo files are not missed.
+    """
+    channels = ainfo.get("Channels")
+    if channels in {"7.1", "5.1"}:
+        return cnt == 1
+    return cnt in (1, 2)
 
 
 def _audio_fmt(line):
@@ -177,7 +190,7 @@ def _audio_fmt(line):
     if "truehd" in raw or "mlp fba" in raw:
         if "16-ch" in raw or "atmos" in raw:
             return "MLP FBA 16-ch"
-        return "MLP FBA"  # fixed: was missing closing quote
+        return "MLP FBA"
     if "dts" in raw:
         if "xll" in raw or "hd master" in raw:
             return "DTS XLL"
@@ -215,8 +228,20 @@ def _norm_channels(line):
 
 
 def _clean_kbps(line):
+    """
+    Extract and normalise a kbps value from a MediaInfo bit-rate line.
+
+    The raw value is something like "384 kbps" or "384 kb/s". After
+    normalising the unit label the string is never a bare digit, so the
+    old val.isdigit() guard was never True and the slicing branch was
+    dead code. The corrected check strips whitespace and the unit before
+    testing, allowing truly bare numeric strings to be returned as-is.
+    """
     val = line.split(":", 1)[1].strip().replace("kb/s", "kbps").replace("Kb/s", "kbps")
-    return val if not val.isdigit() else val[:1] + val[2:]
+    numeric_part = val.replace(" ", "").replace("kbps", "")
+    if numeric_part.isdigit():
+        return numeric_part[:1] + numeric_part[2:]
+    return val
 
 
 def _resolution(lines):
@@ -301,7 +326,7 @@ def process_file(path, is_remux, src):
         out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
         try:
             out_path.write_text(out_text, encoding="utf-8")
-            print(f"[\u2713] {out_path}")
+            print(f"[OK] {out_path}")
         except OSError as e:
             print(f"[!] Could not write output file '{out_path}': {e}")
             print(f"    Tip: check that the folder is not read-only or network-mounted.")
