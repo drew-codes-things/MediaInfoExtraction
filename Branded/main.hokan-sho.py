@@ -14,6 +14,26 @@ ASCII_ART = r"""
 /_/  /_/\___/\__,_/_/\__,_/___/_/ /_/_/  \____/  /_/    \____/_/  /_/ /_/ /_/\__,_/\__/\__/\___/_/
 """
 
+DEFAULT_SOURCES = [
+    "BD", "DVD", "NF", "CR", "AMZN", "HULU", "DSNP", "ATVP",
+    "PMTP", "PCOK", "MAX", "STAN",
+    "HMAX", "ITVX", "BBCIPLAYER", "PEACOCK",
+]
+
+
+def load_sources():
+    """Load sources from sources.txt next to the script, falling back to hardcoded list."""
+    sources_file = Path(__file__).parent / "sources.txt"
+    if sources_file.is_file():
+        try:
+            lines = [l.strip() for l in sources_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+            if lines:
+                return lines
+        except OSError:
+            pass
+    return DEFAULT_SOURCES
+
+
 def extract_info(file_path: str) -> dict:
     info = {"Audio": [], "Subtitles": []}
     section = None
@@ -69,7 +89,7 @@ def extract_info(file_path: str) -> dict:
                 info["Format profile"] = line.split(":", 1)[1].strip()
             elif line.startswith("HDR format"):
                 _handle_hdr(info, line)
-            elif "Format  " in line:
+            elif "Format " in line:
                 vals = line.split(":", 1)[1].split()
                 info["Format"] = vals[1] if len(vals) > 1 else vals[0]
             elif line.startswith("Bit depth"):
@@ -148,7 +168,20 @@ def _handle_hdr(info, line):
 
 
 def _use_this_format(cnt, ainfo):
-    return cnt == 2 or (cnt == 1 and ainfo.get("Channels") in {"7.1", "5.1"})
+    """
+    Decide whether to capture a Format line for an audio track.
+
+    MediaInfo emits two Format lines per track: the first is the container
+    format identifier and the second is the actual codec name we want.
+    For multichannel tracks (5.1/7.1) the codec name appears on the first
+    Format line, so we capture it immediately.
+    For stereo or unknown-channel tracks we always capture on cnt == 1
+    as a fallback so single-track stereo files are not missed.
+    """
+    channels = ainfo.get("Channels")
+    if channels in {"7.1", "5.1"}:
+        return cnt == 1
+    return cnt in (1, 2)
 
 
 def _audio_fmt(line):
@@ -196,17 +229,33 @@ def _norm_channels(line):
 
 
 def _clean_kbps(line):
+    """
+    Extract and normalise a kbps value from a MediaInfo bit-rate line.
+
+    The raw value is something like "384 kbps" or "384 kb/s".
+    """
     val = line.split(":", 1)[1].strip().replace("kb/s", "kbps").replace("Kb/s", "kbps")
-    return val if not val.isdigit() else val[:1] + val[2:]
+    numeric_part = val.replace(" ", "").replace("kbps", "")
+    if numeric_part.isdigit():
+        return f"{numeric_part} kbps"
+    return val
 
 
 def _resolution(lines):
     w = h = None
     for ln in lines:
         if w is None and "Width" in ln:
-            w = int("".join(filter(str.isdigit, ln.split(":")[1])))
+            parts = ln.split(":", 1)
+            if len(parts) > 1:
+                digits = "".join(filter(str.isdigit, parts[1]))
+                if digits:
+                    w = int(digits)
         if h is None and "Height" in ln:
-            h = int("".join(filter(str.isdigit, ln.split(":")[1])))
+            parts = ln.split(":", 1)
+            if len(parts) > 1:
+                digits = "".join(filter(str.isdigit, parts[1]))
+                if digits:
+                    h = int(digits)
     return w, h
 
 
@@ -287,8 +336,12 @@ def process_file(path, is_remux, src):
         info = extract_info(str(p))
         out_text = format_output(info, is_remux, src)
         out_path = p.with_name(f"Formatted - {p.stem}{p.suffix}")
-        out_path.write_text(out_text, encoding="utf-8")
-        print(f"[\u2713] {out_path}")
+        try:
+            out_path.write_text(out_text, encoding="utf-8")
+            print(f"[OK] {out_path}")
+        except OSError as e:
+            print(f"[!] Could not write output file '{out_path}': {e}")
+            print("    Tip: check that the folder is not read-only or network-mounted.")
     except Exception as e:
         print(f"[!] Error processing {p.name}: {e}")
 
@@ -303,29 +356,31 @@ def ask_yes_no(prompt, default="y"):
     return ans == "y"
 
 
-def choose_source():
-    opt = {
-        "1": "BD", "2": "DVD", "3": "NF", "4": "CR",
-        "5": "AMZN", "6": "HULU", "7": "DSNP", "8": "ATVP",
-        "9": "PMTP", "10": "PCOK", "11": "MAX", "12": "STAN"
-    }
+def choose_source(sources):
     print("\nChoose media source:")
-    for k, v in opt.items():
-        print(f"{k}. {v}")
-    choice = input("Enter (1-12) [1]: ").strip() or "1"
-    return opt.get(choice, "BD")
+    for i, s in enumerate(sources, 1):
+        print(f"{i}. {s}")
+    choice = input(f"Enter (1-{len(sources)}) [1]: ").strip() or "1"
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(sources):
+            return sources[idx]
+    except ValueError:
+        pass
+    return sources[0]
 
 
 def main():
     print(ASCII_ART)
+    sources = load_sources()
 
     print("Select run mode:")
-    print("1. Batch – drop or paste multiple files (space-separated or quoted)")
-    print("2. Interactive – one path at a time")
+    print("1. Batch - drag and drop files or paste quoted paths")
+    print("2. Interactive - one path at a time")
     mode = input("Choose 1 or 2 [1]: ").strip() or "1"
 
     if mode == "1":
-        print("\nDrag and drop your file(s) here, then press Enter:")
+        print("\nDrag and drop your file(s) here (quoted paths are supported), then press Enter:")
         raw = input("> ").strip()
         files = shlex.split(raw)
         if not files:
@@ -334,14 +389,14 @@ def main():
         same = ask_yes_no("\nUse the SAME settings for every file?", default="y")
         if same:
             is_remux = ask_yes_no("Remux?", default="n")
-            src = choose_source()
+            src = choose_source(sources)
             for f in files:
                 process_file(f, is_remux, src)
         else:
             for f in files:
                 print(f"\n--- {f} ---")
                 is_remux = ask_yes_no("Remux?", default="n")
-                src = choose_source()
+                src = choose_source(sources)
                 process_file(f, is_remux, src)
 
     else:
@@ -350,7 +405,7 @@ def main():
             if not f:
                 break
             is_remux = ask_yes_no("Remux?", default="n")
-            src = choose_source()
+            src = choose_source(sources)
             process_file(f, is_remux, src)
             if not ask_yes_no("Process another file?", default="y"):
                 break
