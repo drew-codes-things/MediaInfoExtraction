@@ -244,9 +244,17 @@ def _resolution(lines):
     w = h = None
     for ln in lines:
         if w is None and "Width" in ln:
-            w = int("".join(filter(str.isdigit, ln.split(":")[1])))
+            parts = ln.split(":", 1)
+            if len(parts) > 1:
+                digits = "".join(filter(str.isdigit, parts[1]))
+                if digits:
+                    w = int(digits)
         if h is None and "Height" in ln:
-            h = int("".join(filter(str.isdigit, ln.split(":")[1])))
+            parts = ln.split(":", 1)
+            if len(parts) > 1:
+                digits = "".join(filter(str.isdigit, parts[1]))
+                if digits:
+                    h = int(digits)
     return w, h
 
 
