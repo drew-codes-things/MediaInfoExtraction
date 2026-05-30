@@ -231,16 +231,12 @@ def _clean_kbps(line):
     """
     Extract and normalise a kbps value from a MediaInfo bit-rate line.
 
-    The raw value is something like "384 kbps" or "384 kb/s". After
-    normalising the unit label the string is never a bare digit, so the
-    old val.isdigit() guard was never True and the slicing branch was
-    dead code. The corrected check strips whitespace and the unit before
-    testing, allowing truly bare numeric strings to be returned as-is.
+    The raw value is something like "384 kbps" or "384 kb/s".
     """
     val = line.split(":", 1)[1].strip().replace("kb/s", "kbps").replace("Kb/s", "kbps")
     numeric_part = val.replace(" ", "").replace("kbps", "")
     if numeric_part.isdigit():
-        return numeric_part[:1] + numeric_part[2:]
+        return f"{numeric_part} kbps"
     return val
 
 
