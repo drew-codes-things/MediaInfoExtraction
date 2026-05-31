@@ -63,6 +63,7 @@ def extract_info(file_path: str) -> dict:
 
     for line in lines:
         stripped = line.strip()
+        key = line.split(":", 1)[0].strip() if ":" in line else line.strip()
         if re.match(r'^Video\b', stripped):
             section = "Video"
         elif re.match(r'^Audio\b', stripped):
@@ -88,12 +89,12 @@ def extract_info(file_path: str) -> dict:
                 info["Format profile"] = line.split(":", 1)[1].strip()
             elif line.startswith("HDR format"):
                 _handle_hdr(info, line)
-            elif "Format " in line:
+            elif key == "Format":
                 vals = line.split(":", 1)[1].split()
                 info["Format"] = vals[1] if len(vals) > 1 else vals[0]
             elif line.startswith("Bit depth"):
                 info["Bit depth"] = line.split(":", 1)[1].strip().replace("bits", "Bit")
-            elif "Display aspect ratio" in line and "Active" not in info:
+            elif "Display aspect ratio" in line and "active" not in line.lower():
                 raw = line.split(":", 1)[1].strip()
                 info["Display aspect ratio"] = _norm_aspect_ratio(raw)
 
@@ -102,7 +103,7 @@ def extract_info(file_path: str) -> dict:
                 language_cnt += 1
                 if language_cnt == 2:
                     audio_info["Language"] = line.split(":", 1)[1].strip()
-            elif "Format" in line:
+            elif key == "Format":
                 format_cnt += 1
                 if _use_this_format(format_cnt, audio_info):
                     audio_info["Format"] = _audio_fmt(line)
@@ -120,7 +121,7 @@ def extract_info(file_path: str) -> dict:
                 language_cnt += 1
                 if language_cnt == 2:
                     subtitle_info["Language"] = line.split(":", 1)[1].strip()
-            elif "Format" in line:
+            elif key == "Format":
                 raw = line.split(":", 1)[1].strip()
                 if raw == "UTF-8" or "ffdshow" in raw.lower():
                     subtitle_info["Format"] = "ASS"
@@ -141,15 +142,19 @@ def extract_info(file_path: str) -> dict:
 
 def _norm_bitrate(line):
     raw = line.split(":", 1)[1].strip()
-    cleaned = re.sub(r'[^0-9.]', ' ', raw).strip()
+    num_match = re.search(r'(\d[\d\s,]*(?:\.\d+)?)', raw)
     try:
-        val = float(cleaned.split()[0]) if cleaned else 0
+        if not num_match:
+            return raw.replace("bits", "Bit")
+        val_str = num_match.group(1).replace(" ", "").replace(",", "")
+        val = float(val_str)
+        lower = raw.lower()
+        if "mb/s" in lower or "mbps" in lower:
+            return f"{int(val * 1000)} kbps"
+        if "kb/s" in lower or "kbps" in lower:
+            return f"{int(val)} kbps"
         if val > 100000:
             return f"{int(val / 1000)} kbps"
-        if "mb/s" in raw.lower():
-            return f"{int(val * 1000)} kbps"
-        if "kb/s" in raw.lower() or "kbps" in raw.lower():
-            return f"{int(val)} kbps"
         return f"{int(val)} kbps" if val > 0 else raw
     except (ValueError, IndexError):
         return raw.replace("bits", "Bit")
@@ -170,17 +175,15 @@ def _use_this_format(cnt, ainfo):
     """
     Decide whether to capture a Format line for an audio track.
 
-    MediaInfo emits two Format lines per track: the first is the container
-    format identifier and the second is the actual codec name we want.
-    For multichannel tracks (5.1/7.1) the codec name appears on the first
-    Format line, so we capture it immediately.
-    For stereo or unknown-channel tracks we always capture on cnt == 1
-    as a fallback so single-track stereo files are not missed.
+    Prefer the first Format line. Capturing both first and second Format lines
+    can overwrite the codec with sub-format detail on stereo tracks.
+
+    For multichannel tracks (5.1/7.1), the first line is also the desired one.
     """
     channels = ainfo.get("Channels")
     if channels in {"7.1", "5.1"}:
         return cnt == 1
-    return cnt in (1, 2)
+    return cnt == 1
 
 
 def _audio_fmt(line):
