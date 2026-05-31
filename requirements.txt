@@ -1,3 +1,0 @@
-# No third-party dependencies required.
-# This project uses only the Python standard library.
-# Python 3.8 or higher is recommended.
